@@ -1,0 +1,6 @@
+framework module Pods_PhotoUpDater_PhotoUpDaterUITests {
+  umbrella header "Pods-PhotoUpDater-PhotoUpDaterUITests-umbrella.h"
+
+  export *
+  module * { export * }
+}
