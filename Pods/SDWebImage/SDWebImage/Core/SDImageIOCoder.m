@@ -11,8 +11,12 @@
 #import "NSImage+Compatibility.h"
 #import <ImageIO/ImageIO.h>
 #import "UIImage+Metadata.h"
-#import "SDImageHEICCoderInternal.h"
 #import "SDImageIOAnimatedCoderInternal.h"
+
+// Specify DPI for vector format in CGImageSource, like PDF
+static NSString * kSDCGImageSourceRasterizationDPI = @"kCGImageSourceRasterizationDPI";
+// Specify File Size for lossy format encoding, like JPEG
+static NSString * kSDCGImageDestinationRequestedFileSize = @"kCGImageDestinationRequestedFileSize";
 
 @implementation SDImageIOCoder {
     size_t _width, _height;
@@ -50,21 +54,34 @@
     return coder;
 }
 
+#pragma mark - Utils
++ (CGRect)boxRectFromPDFFData:(nonnull NSData *)data {
+    CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)data);
+    if (!provider) {
+        return CGRectZero;
+    }
+    CGPDFDocumentRef document = CGPDFDocumentCreateWithProvider(provider);
+    CGDataProviderRelease(provider);
+    if (!document) {
+        return CGRectZero;
+    }
+    
+    // `CGPDFDocumentGetPage` page number is 1-indexed.
+    CGPDFPageRef page = CGPDFDocumentGetPage(document, 1);
+    if (!page) {
+        CGPDFDocumentRelease(document);
+        return CGRectZero;
+    }
+    
+    CGRect boxRect = CGPDFPageGetBoxRect(page, kCGPDFMediaBox);
+    CGPDFDocumentRelease(document);
+    
+    return boxRect;
+}
+
 #pragma mark - Decode
 - (BOOL)canDecodeFromData:(nullable NSData *)data {
-    switch ([NSData sd_imageFormatForImageData:data]) {
-        case SDImageFormatWebP:
-            // Do not support WebP decoding
-            return NO;
-        case SDImageFormatHEIC:
-            // Check HEIC decoding compatibility
-            return [SDImageHEICCoder canDecodeFromHEICFormat];
-        case SDImageFormatHEIF:
-            // Check HEIF decoding compatibility
-            return [SDImageHEICCoder canDecodeFromHEIFFormat];
-        default:
-            return YES;
-    }
+    return YES;
 }
 
 - (UIImage *)decodedImageWithData:(NSData *)data options:(nullable SDImageCoderOptions *)options {
@@ -98,13 +115,39 @@
         return nil;
     }
     
-    UIImage *image = [SDImageIOAnimatedCoder createFrameAtIndex:0 source:source scale:scale preserveAspectRatio:preserveAspectRatio thumbnailSize:thumbnailSize];
+    CFStringRef uttype = CGImageSourceGetType(source);
+    SDImageFormat imageFormat = [NSData sd_imageFormatFromUTType:uttype];
+    // Check vector format
+    NSDictionary *decodingOptions = nil;
+    if (imageFormat == SDImageFormatPDF) {
+        // Use 72 DPI (1:1 inch to pixel) by default, matching Apple's PDFKit behavior
+        NSUInteger rasterizationDPI = 72;
+        CGFloat maxPixelSize = MAX(thumbnailSize.width, thumbnailSize.height);
+        if (maxPixelSize > 0) {
+            // Calculate DPI based on PDF box and pixel size
+            CGRect boxRect = [self.class boxRectFromPDFFData:data];
+            CGFloat maxBoxSize = MAX(boxRect.size.width, boxRect.size.height);
+            if (maxBoxSize > 0) {
+                rasterizationDPI = rasterizationDPI * (maxPixelSize / maxBoxSize);
+            }
+        }
+        decodingOptions = @{
+            // This option will cause ImageIO return the pixel size from `CGImageSourceCopyProperties`
+            // If not provided, it always return 0 size
+            kSDCGImageSourceRasterizationDPI : @(rasterizationDPI),
+        };
+        // Already calculated DPI, avoid re-calculation based on thumbnail information
+        preserveAspectRatio = YES;
+        thumbnailSize = CGSizeZero;
+    }
+    
+    UIImage *image = [SDImageIOAnimatedCoder createFrameAtIndex:0 source:source scale:scale preserveAspectRatio:preserveAspectRatio thumbnailSize:thumbnailSize forceDecode:NO options:decodingOptions];
     CFRelease(source);
     if (!image) {
         return nil;
     }
     
-    image.sd_imageFormat = [NSData sd_imageFormatForImageData:data];
+    image.sd_imageFormat = imageFormat;
     return image;
 }
 
@@ -190,7 +233,7 @@
         if (scaleFactor != nil) {
             scale = MAX([scaleFactor doubleValue], 1);
         }
-        image = [SDImageIOAnimatedCoder createFrameAtIndex:0 source:_imageSource scale:scale preserveAspectRatio:_preserveAspectRatio thumbnailSize:_thumbnailSize];
+        image = [SDImageIOAnimatedCoder createFrameAtIndex:0 source:_imageSource scale:scale preserveAspectRatio:_preserveAspectRatio thumbnailSize:_thumbnailSize forceDecode:NO options:nil];
         if (image) {
             CFStringRef uttype = CGImageSourceGetType(_imageSource);
             image.sd_imageFormat = [NSData sd_imageFormatFromUTType:uttype];
@@ -202,28 +245,21 @@
 
 #pragma mark - Encode
 - (BOOL)canEncodeToFormat:(SDImageFormat)format {
-    switch (format) {
-        case SDImageFormatWebP:
-            // Do not support WebP encoding
-            return NO;
-        case SDImageFormatHEIC:
-            // Check HEIC encoding compatibility
-            return [SDImageHEICCoder canEncodeToHEICFormat];
-        case SDImageFormatHEIF:
-            // Check HEIF encoding compatibility
-            return [SDImageHEICCoder canEncodeToHEIFFormat];
-        default:
-            return YES;
-    }
+    return YES;
 }
 
 - (NSData *)encodedDataWithImage:(UIImage *)image format:(SDImageFormat)format options:(nullable SDImageCoderOptions *)options {
     if (!image) {
         return nil;
     }
+    CGImageRef imageRef = image.CGImage;
+    if (!imageRef) {
+        // Earily return, supports CGImage only
+        return nil;
+    }
     
     if (format == SDImageFormatUndefined) {
-        BOOL hasAlpha = [SDImageCoderHelper CGImageContainsAlpha:image.CGImage];
+        BOOL hasAlpha = [SDImageCoderHelper CGImageContainsAlpha:imageRef];
         if (hasAlpha) {
             format = SDImageFormatPNG;
         } else {
@@ -248,14 +284,54 @@
     CGImagePropertyOrientation exifOrientation = kCGImagePropertyOrientationUp;
 #endif
     properties[(__bridge NSString *)kCGImagePropertyOrientation] = @(exifOrientation);
+    // Encoding Options
     double compressionQuality = 1;
     if (options[SDImageCoderEncodeCompressionQuality]) {
         compressionQuality = [options[SDImageCoderEncodeCompressionQuality] doubleValue];
     }
     properties[(__bridge NSString *)kCGImageDestinationLossyCompressionQuality] = @(compressionQuality);
+    CGColorRef backgroundColor = [options[SDImageCoderEncodeBackgroundColor] CGColor];
+    if (backgroundColor) {
+        properties[(__bridge NSString *)kCGImageDestinationBackgroundColor] = (__bridge id)(backgroundColor);
+    }
+    CGSize maxPixelSize = CGSizeZero;
+    NSValue *maxPixelSizeValue = options[SDImageCoderEncodeMaxPixelSize];
+    if (maxPixelSizeValue != nil) {
+#if SD_MAC
+        maxPixelSize = maxPixelSizeValue.sizeValue;
+#else
+        maxPixelSize = maxPixelSizeValue.CGSizeValue;
+#endif
+    }
+    CGFloat pixelWidth = (CGFloat)CGImageGetWidth(imageRef);
+    CGFloat pixelHeight = (CGFloat)CGImageGetHeight(imageRef);
+    CGFloat finalPixelSize = 0;
+    BOOL encodeFullImage = maxPixelSize.width == 0 || maxPixelSize.height == 0 || pixelWidth == 0 || pixelHeight == 0 || (pixelWidth <= maxPixelSize.width && pixelHeight <= maxPixelSize.height);
+    if (!encodeFullImage) {
+        // Thumbnail Encoding
+        CGFloat pixelRatio = pixelWidth / pixelHeight;
+        CGFloat maxPixelSizeRatio = maxPixelSize.width / maxPixelSize.height;
+        if (pixelRatio > maxPixelSizeRatio) {
+            finalPixelSize = MAX(maxPixelSize.width, maxPixelSize.width / pixelRatio);
+        } else {
+            finalPixelSize = MAX(maxPixelSize.height, maxPixelSize.height * pixelRatio);
+        }
+        properties[(__bridge NSString *)kCGImageDestinationImageMaxPixelSize] = @(finalPixelSize);
+    }
+    NSUInteger maxFileSize = [options[SDImageCoderEncodeMaxFileSize] unsignedIntegerValue];
+    if (maxFileSize > 0) {
+        properties[kSDCGImageDestinationRequestedFileSize] = @(maxFileSize);
+        // Remove the quality if we have file size limit
+        properties[(__bridge NSString *)kCGImageDestinationLossyCompressionQuality] = nil;
+    }
+    BOOL embedThumbnail = NO;
+    if (options[SDImageCoderEncodeEmbedThumbnail]) {
+        embedThumbnail = [options[SDImageCoderEncodeEmbedThumbnail] boolValue];
+    }
+    properties[(__bridge NSString *)kCGImageDestinationEmbedThumbnail] = @(embedThumbnail);
     
     // Add your image to the destination.
-    CGImageDestinationAddImage(imageDestination, image.CGImage, (__bridge CFDictionaryRef)properties);
+    CGImageDestinationAddImage(imageDestination, imageRef, (__bridge CFDictionaryRef)properties);
     
     // Finalize the destination.
     if (CGImageDestinationFinalize(imageDestination) == NO) {

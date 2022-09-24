@@ -10,6 +10,7 @@
 #import "SDWebImageCompat.h"
 #import "SDWebImageOperation.h"
 #import "SDWebImageDefine.h"
+#import "SDImageCoder.h"
 
 /// Image Cache Type
 typedef NS_ENUM(NSInteger, SDImageCacheType) {
@@ -36,6 +37,7 @@ typedef NS_ENUM(NSInteger, SDImageCacheType) {
 };
 
 typedef void(^SDImageCacheCheckCompletionBlock)(BOOL isInCache);
+typedef void(^SDImageCacheQueryDataCompletionBlock)(NSData * _Nullable data);
 typedef void(^SDImageCacheCalculateSizeBlock)(NSUInteger fileCount, NSUInteger totalSize);
 typedef NSString * _Nullable (^SDImageCacheAdditionalCachePathBlock)(NSString * _Nonnull key);
 typedef void(^SDImageCacheQueryCompletionBlock)(UIImage * _Nullable image, NSData * _Nullable data, SDImageCacheType cacheType);
@@ -53,6 +55,12 @@ typedef void(^SDImageCacheContainsCompletionBlock)(SDImageCacheType containsCach
  */
 FOUNDATION_EXPORT UIImage * _Nullable SDImageCacheDecodeImageData(NSData * _Nonnull imageData, NSString * _Nonnull cacheKey, SDWebImageOptions options, SDWebImageContext * _Nullable context);
 
+/// Get the decode options from the loading context options and cache key. This is the built-in translate between the web loading part to the decoding part (which does not depens on).
+/// @param context The options arg from the input
+/// @param options The context arg from the input
+/// @param cacheKey The image cache key from the input. Should not be nil
+FOUNDATION_EXPORT SDImageCoderOptions * _Nonnull SDGetDecodeOptionsFromContext(SDWebImageContext * _Nullable context, SDWebImageOptions options, NSString * _Nonnull cacheKey);
+
 /**
  This is the image cache protocol to provide custom image cache for `SDWebImageManager`.
  Though the best practice to custom image cache, is to write your own class which conform `SDMemoryCache` or `SDDiskCache` protocol for `SDImageCache` class (See more on `SDImageCacheConfig.memoryCacheClass & SDImageCacheConfig.diskCacheClass`).
@@ -63,7 +71,7 @@ FOUNDATION_EXPORT UIImage * _Nullable SDImageCacheDecodeImageData(NSData * _Nonn
 @required
 /**
  Query the cached image from image cache for given key. The operation can be used to cancel the query.
- If image is cached in memory, completion is called synchronously, else aynchronously and depends on the options arg (See `SDWebImageQueryDiskSync`)
+ If image is cached in memory, completion is called synchronously, else asynchronously and depends on the options arg (See `SDWebImageQueryDiskSync`)
 
  @param key The image cache key
  @param options A mask to specify options to use for this query
@@ -77,7 +85,24 @@ FOUNDATION_EXPORT UIImage * _Nullable SDImageCacheDecodeImageData(NSData * _Nonn
                                           completion:(nullable SDImageCacheQueryCompletionBlock)completionBlock;
 
 /**
- Store the image into image cache for the given key. If cache type is memory only, completion is called synchronously, else aynchronously.
+ Query the cached image from image cache for given key. The operation can be used to cancel the query.
+ If image is cached in memory, completion is called synchronously, else asynchronously and depends on the options arg (See `SDWebImageQueryDiskSync`)
+
+ @param key The image cache key
+ @param options A mask to specify options to use for this query
+ @param context A context contains different options to perform specify changes or processes, see `SDWebImageContextOption`. This hold the extra objects which `options` enum can not hold.
+ @param cacheType Specify where to query the cache from. By default we use `.all`, which means both memory cache and disk cache. You can choose to query memory only or disk only as well. Pass `.none` is invalid and callback with nil immediately.
+ @param completionBlock The completion block. Will not get called if the operation is cancelled
+ @return The operation for this query
+ */
+- (nullable id<SDWebImageOperation>)queryImageForKey:(nullable NSString *)key
+                                             options:(SDWebImageOptions)options
+                                             context:(nullable SDWebImageContext *)context
+                                           cacheType:(SDImageCacheType)cacheType
+                                          completion:(nullable SDImageCacheQueryCompletionBlock)completionBlock;
+
+/**
+ Store the image into image cache for the given key. If cache type is memory only, completion is called synchronously, else asynchronously.
 
  @param image The image to store
  @param imageData The image data to be used for disk storage
@@ -92,7 +117,7 @@ FOUNDATION_EXPORT UIImage * _Nullable SDImageCacheDecodeImageData(NSData * _Nonn
         completion:(nullable SDWebImageNoParamsBlock)completionBlock;
 
 /**
- Remove the image from image cache for the given key. If cache type is memory only, completion is called synchronously, else aynchronously.
+ Remove the image from image cache for the given key. If cache type is memory only, completion is called synchronously, else asynchronously.
 
  @param key The image cache key
  @param cacheType The image remove op cache type
@@ -103,7 +128,7 @@ FOUNDATION_EXPORT UIImage * _Nullable SDImageCacheDecodeImageData(NSData * _Nonn
                completion:(nullable SDWebImageNoParamsBlock)completionBlock;
 
 /**
- Check if image cache contains the image for the given key (does not load the image). If image is cached in memory, completion is called synchronously, else aynchronously.
+ Check if image cache contains the image for the given key (does not load the image). If image is cached in memory, completion is called synchronously, else asynchronously.
 
  @param key The image cache key
  @param cacheType The image contains op cache type
@@ -114,7 +139,7 @@ FOUNDATION_EXPORT UIImage * _Nullable SDImageCacheDecodeImageData(NSData * _Nonn
                  completion:(nullable SDImageCacheContainsCompletionBlock)completionBlock;
 
 /**
- Clear all the cached images for image cache. If cache type is memory only, completion is called synchronously, else aynchronously.
+ Clear all the cached images for image cache. If cache type is memory only, completion is called synchronously, else asynchronously.
 
  @param cacheType The image clear op cache type
  @param completionBlock A block executed after the operation is finished

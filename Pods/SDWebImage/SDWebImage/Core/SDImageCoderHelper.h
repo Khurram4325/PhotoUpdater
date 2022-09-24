@@ -10,6 +10,15 @@
 #import "SDWebImageCompat.h"
 #import "SDImageFrame.h"
 
+typedef NS_ENUM(NSUInteger, SDImageCoderDecodeSolution) {
+    /// automatically choose the solution based on image format, hardware, OS version. This keep balance for compatibility and performance. Default after SDWebImage 5.13.0
+    SDImageCoderDecodeSolutionAutomatic,
+    /// always use CoreGraphics to draw on bitmap context and trigger decode. Best compatibility. Default before SDWebImage 5.13.0
+    SDImageCoderDecodeSolutionCoreGraphics,
+    /// available on iOS/tvOS 15+, use UIKit's new CGImageDecompressor/CMPhoto to decode. Best performance. If failed, will fallback to CoreGraphics as well
+    SDImageCoderDecodeSolutionUIKit
+};
+
 /**
  Provide some common helper methods for building the image decoder/encoder.
  */
@@ -76,12 +85,23 @@
 /**
  Create a scaled CGImage by the provided CGImage and size. This follows The Create Rule and you are response to call release after usage.
  It will detect whether the image size matching the scale size, if not, stretch the image to the target size.
+ @note If you need to keep aspect ratio, you can calculate the scale size by using `scaledSizeWithImageSize` first.
  
  @param cgImage The CGImage
  @param size The scale size in pixel.
  @return A new created scaled image
  */
 + (CGImageRef _Nullable)CGImageCreateScaled:(_Nonnull CGImageRef)cgImage size:(CGSize)size CF_RETURNS_RETAINED;
+
+/** Scale the image size based on provided scale size, whether or not to preserve aspect ratio, whether or not to scale up.
+ @note For example, if you implements thumnail decoding, pass `shouldScaleUp` to NO to avoid the calculated size larger than image size.
+ 
+ @param imageSize The image size (in pixel or point defined by caller)
+ @param scaleSize The scale size (in pixel or point defined by caller)
+ @param preserveAspectRatio Whether or not to preserve aspect ratio
+ @param shouldScaleUp Whether or not to scale up (or scale down only)
+ */
++ (CGSize)scaledSizeWithImageSize:(CGSize)imageSize scaleSize:(CGSize)scaleSize preserveAspectRatio:(BOOL)preserveAspectRatio shouldScaleUp:(BOOL)shouldScaleUp;
 
 /**
  Return the decoded image by the provided image. This one unlike `CGImageCreateDecoded:`, will not decode the image which contains alpha channel or animated image
@@ -91,7 +111,8 @@
 + (UIImage * _Nullable)decodedImageWithImage:(UIImage * _Nullable)image;
 
 /**
- Return the decoded and probably scaled down image by the provided image. If the image is large than the limit size, will try to scale down. Or just works as `decodedImageWithImage:`
+ Return the decoded and probably scaled down image by the provided image. If the image pixels bytes size large than the limit bytes, will try to scale down. Or just works as `decodedImageWithImage:`, never scale up.
+ @warning You should not pass too small bytes, the suggestion value should be larger than 1MB. Even we use Tile Decoding to avoid OOM, however, small bytes will consume much more CPU time because we need to iterate more times to draw each tile.
 
  @param image The image to be decoded and scaled down
  @param bytes The limit bytes size. Provide 0 to use the build-in limit.
@@ -100,8 +121,14 @@
 + (UIImage * _Nullable)decodedAndScaledDownImageWithImage:(UIImage * _Nullable)image limitBytes:(NSUInteger)bytes;
 
 /**
- Control the default limit bytes to scale down larget images.
- This value must be larger than or equal to 1MB. Defaults to 60MB on iOS/tvOS, 90MB on macOS, 30MB on watchOS.
+ Control the default force decode solution. Available solutions  in `SDImageCoderDecodeSolution`.
+ @note Defaults to `SDImageCoderDecodeSolutionAutomatic`, which prefers to use UIKit for JPEG/HEIF, and fallback on CoreGraphics. If you want control on your hand, set the other solution.
+ */
+@property (class, readwrite) SDImageCoderDecodeSolution defaultDecodeSolution;
+
+/**
+ Control the default limit bytes to scale down largest images.
+ This value must be larger than 4 Bytes (at least 1x1 pixel). Defaults to 60MB on iOS/tvOS, 90MB on macOS, 30MB on watchOS.
  */
 @property (class, readwrite) NSUInteger defaultScaleDownLimitBytes;
 

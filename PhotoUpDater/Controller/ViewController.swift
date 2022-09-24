@@ -88,14 +88,17 @@ class ViewController: UIViewController {
         
         let ok = UIAlertAction(title: "Ok", style: .default) { (action) in
             // If user press ok, then function call
-            // To change the slected pictures dates
+            // to change the slected pictures dates
+
+//            let sDate = self.datePicker.date.getString(format: "yyyy-MM-dd hh:mm:ss.Z").getDateString(fromFormat: "yyyy-MM-dd hh:mm:ss.Z" , toFormat: "yyyy-MM-dd hh:mm:ss.Z").getDate(toFormat: "yyyy-MM-dd hh:mm:ss.Z")
             
             let sDate = self.datePicker.date.getString(format: "yyyy-MM-dd hh:mm:ss").getDateString(fromFormat: "yyyy-MM-dd hh:mm:ss" , toFormat: "yyyy-MM-dd hh:mm:ss").getDate(toFormat: "yyyy-MM-dd hh:mm:ss")
             
             self.changeSelectedImagesDate(updatedDate: sDate ?? Date())
         }
         
-        // If user tap cancel nothing happens
+        // if user tap cancel nothing happens
+        // just to hide pop-up
         let cancel = UIAlertAction(title: "Cancel", style: .default, handler: nil)
         
         alert.addAction(ok)
@@ -140,12 +143,10 @@ class ViewController: UIViewController {
         case .authorized:
             //PHAuthorizationStatus.Authorized
             return 3
-        case .limited:
-            //PHAuthorizationStatus.Limited
-            return 4
         @unknown default:
             fatalError()
-        }}
+        }
+    }
     
     private func openGallary() {
         // Opens the photo gallery to select pics
@@ -173,6 +174,7 @@ class ViewController: UIViewController {
                 }
                 self.showSelectedDatesAlert(title: title, message: message)
             }
+            
         }
         
         if let assets = self.selectedAssets {
@@ -185,9 +187,12 @@ class ViewController: UIViewController {
         
         // user can select only photos
         pickerController.assetType = .allPhotos
+        
         pickerController.allowMultipleTypes = false
         pickerController.allowsLandscape = false
+        
         pickerController.UIDelegate = AssetClickHandler()
+        
         pickerController.modalPresentationStyle = .fullScreen
         
         self.present(pickerController, animated: true) {}
@@ -239,7 +244,7 @@ extension ViewController {
     // Function to perform creation date change
     func setChange(forAsset: PHAsset, updatedDate: Date) {
         PHPhotoLibrary.shared().performChanges({
-            //Asset is the photo that PHAset wants to modify
+            //asset is the photo that PHAset wants to modify
             let request = PHAssetChangeRequest(for: forAsset)
             // Set the creation date to user updated date
             request.creationDate = updatedDate
@@ -255,20 +260,19 @@ extension ViewController {
 
 class AssetClickHandler: DKImagePickerControllerBaseUIDelegate {
     override func imagePickerController(_ imagePickerController: DKImagePickerController, didSelectAssets: [DKAsset]) {
-        //Tap to select asset
-        //Use this place for asset selection customisation
+        //tap to select asset
+        //use this place for asset selection customisation
         print("didClickAsset for selection")
     }
     
     override func imagePickerController(_ imagePickerController: DKImagePickerController, didDeselectAssets: [DKAsset]) {
-        //Tap to deselect asset
-        //Use this place for asset deselection customisation
+        //tap to deselect asset
+        //use this place for asset deselection customisation
         print("didClickAsset for deselection")
     }
 }
 
 // MARK: - UICollectionViewDataSource, UICollectionViewDelegateFlowLayout
-
 extension ViewController: UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
     
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
